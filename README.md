@@ -45,6 +45,29 @@ A full workout app that lives in your Google Sheets and runs as a mobile web app
 - Copy ALL content from Index.html file you received
 - Paste it
 
+**Manifest Setup (required for permissions):**
+
+1. Enable the Manifest File
+- Open your Apps Script project.
+- Click Project Settings (gear icon ⚙️) in the left sidebar.
+- Check: "Show 'appsscript.json' manifest file in editor".
+
+2. Edit the Manifest
+- Return to the Editor (bracket icon `< >`) in the left sidebar.
+- Select `appsscript.json` from the file list.
+- Add `oauthScopes` to the JSON object as shown below:
+
+```json
+{
+  "runtimeVersion": "V8",
+  "oauthScopes": [
+    "https://www.googleapis.com/auth/script.external_request",
+    "https://www.googleapis.com/auth/spreadsheets",
+    "https://www.googleapis.com/auth/script.container.ui"
+  ]
+}
+```
+
 ### 4. Save Everything
 - Click the floppy disk icon (💾) or Ctrl+S / Cmd+S
 - Make sure both files are saved
