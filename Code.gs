@@ -103,8 +103,24 @@ function setupExerciseCacheSheet() {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
   const sheet = ss.getSheetByName(SHEET_NAME_EXERCISE_CACHE);
   if (sheet.getLastRow() === 0) {
-    sheet.appendRow(['Exercise_ID', 'Name', 'JSON', 'Image_URL', 'Video_URL', 'Updated_At']);
-    sheet.getRange(1, 1, 1, 6).setFontWeight('bold').setBackground('#1a1a2e').setFontColor('#ffffff');
+    const headers = [
+      'exerciseId', 'name', 'imageUrl', 'imageUrls', 'equipments', 'bodyParts',
+      'exerciseType', 'targetMuscles', 'secondaryMuscles', 'videoUrl', 'keywords',
+      'overview', 'instructions', 'exerciseTips', 'variations', 'relatedExerciseIds',
+      'rawJSON', 'dateAdded', 'isCustom'
+    ];
+    sheet.appendRow(headers);
+    sheet.getRange(1, 1, 1, headers.length).setFontWeight('bold').setBackground('#1a1a2e').setFontColor('#ffffff');
+  }
+}
+
+function ensureExerciseCacheColumns_() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const sheet = ss.getSheetByName(SHEET_NAME_EXERCISE_CACHE);
+  if (!sheet || sheet.getLastRow() === 0) return;
+  const headers = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0];
+  if (headers.indexOf('isCustom') === -1) {
+    sheet.getRange(1, sheet.getLastColumn() + 1).setValue('isCustom');
   }
 }
 
@@ -439,6 +455,10 @@ function ensureWorkoutPlanMetadataColumns_(sheet) {
     inserts.push(RELATED_EXERCISE_IDS_COLUMN);
   }
 
+  if (headers.indexOf('IsCustom') === -1) {
+    inserts.push('IsCustom');
+  }
+
   if (!inserts.length) {
     return;
   }
@@ -643,15 +663,35 @@ function getExerciseCacheMap_() {
     return {};
   }
 
-  const rows = sheet.getRange(2, 1, sheet.getLastRow() - 1, 6).getValues();
+  const data = sheet.getDataRange().getValues();
   const map = {};
 
-  rows.forEach(row => {
+  for (let i = 1; i < data.length; i++) {
+    const row = data[i];
     const id = String(row[0] || '').trim();
-    const json = String(row[2] || '').trim();
-    if (!id || !json) return;
-    map[id] = json;
-  });
+    if (!id) continue;
+
+    const obj = {
+      exerciseId: id,
+      name: String(row[1] || '').trim(),
+      imageUrl: String(row[2] || '').trim(),
+      imageUrls: parseJsonObject_(row[3] || '{}'),
+      equipments: parseJsonArray_(row[4] || '[]'),
+      bodyParts: parseJsonArray_(row[5] || '[]'),
+      exerciseType: String(row[6] || '').trim(),
+      targetMuscles: parseJsonArray_(row[7] || '[]'),
+      secondaryMuscles: parseJsonArray_(row[8] || '[]'),
+      videoUrl: String(row[9] || '').trim(),
+      keywords: parseJsonArray_(row[10] || '[]'),
+      overview: String(row[11] || '').trim(),
+      instructions: parseJsonArray_(row[12] || '[]'),
+      exerciseTips: parseJsonArray_(row[13] || '[]'),
+      variations: parseJsonArray_(row[14] || '[]'),
+      relatedExerciseIds: parseJsonArray_(row[15] || '[]')
+    };
+
+    map[id] = obj;
+  }
 
   return map;
 }
@@ -696,13 +736,27 @@ function getExerciseDetailsWithCache_(exerciseId) {
 
   for (let i = 1; i < data.length; i++) {
     if (String(data[i][0] || '').trim() === exerciseId) {
-      const json = String(data[i][2] || '').trim();
-      if (json) {
-        try {
-          return JSON.parse(json);
-        } catch (e) {
-          break;
-        }
+      const row = data[i];
+      const obj = {
+        exerciseId: String(row[0] || '').trim(),
+        name: String(row[1] || '').trim(),
+        imageUrl: String(row[2] || '').trim(),
+        imageUrls: parseJsonObject_(row[3] || '{}'),
+        equipments: parseJsonArray_(row[4] || '[]'),
+        bodyParts: parseJsonArray_(row[5] || '[]'),
+        exerciseType: String(row[6] || '').trim(),
+        targetMuscles: parseJsonArray_(row[7] || '[]'),
+        secondaryMuscles: parseJsonArray_(row[8] || '[]'),
+        videoUrl: String(row[9] || '').trim(),
+        keywords: parseJsonArray_(row[10] || '[]'),
+        overview: String(row[11] || '').trim(),
+        instructions: parseJsonArray_(row[12] || '[]'),
+        exerciseTips: parseJsonArray_(row[13] || '[]'),
+        variations: parseJsonArray_(row[14] || '[]'),
+        relatedExerciseIds: parseJsonArray_(row[15] || '[]')
+      };
+      if (obj.name) {
+        return obj;
       }
     }
   }
@@ -722,6 +776,7 @@ function upsertExerciseCache_(exerciseId, details) {
   }
 
   setupExerciseCacheSheet();
+  ensureExerciseCacheColumns_();
   const ss = SpreadsheetApp.getActiveSpreadsheet();
   const sheet = ss.getSheetByName(SHEET_NAME_EXERCISE_CACHE);
   const data = sheet.getDataRange().getValues();
@@ -729,10 +784,23 @@ function upsertExerciseCache_(exerciseId, details) {
   const values = [
     exerciseId,
     details.name || '',
-    JSON.stringify(details),
     details.imageUrl || '',
+    JSON.stringify(details.imageUrls || {}),
+    JSON.stringify(details.equipments || []),
+    JSON.stringify(details.bodyParts || []),
+    details.exerciseType || '',
+    JSON.stringify(details.targetMuscles || []),
+    JSON.stringify(details.secondaryMuscles || []),
     details.videoUrl || '',
-    new Date().toISOString()
+    JSON.stringify(details.keywords || []),
+    details.overview || '',
+    JSON.stringify(details.instructions || []),
+    JSON.stringify(details.exerciseTips || []),
+    JSON.stringify(details.variations || []),
+    JSON.stringify(details.relatedExerciseIds || []),
+    JSON.stringify(details),
+    new Date().toISOString(),
+    details.isCustom ? 1 : ''
   ];
 
   for (let i = 1; i < data.length; i++) {
@@ -800,6 +868,10 @@ function getWorkoutForDay(week, dayName) {
         overview: details.overview || '',
         instructions: Array.isArray(details.instructions) ? details.instructions : [],
         targetMuscles: Array.isArray(details.targetMuscles) ? details.targetMuscles : [],
+        secondaryMuscles: Array.isArray(details.secondaryMuscles) ? details.secondaryMuscles : [],
+        bodyParts: Array.isArray(details.bodyParts) ? details.bodyParts : [],
+        exerciseType: details.exerciseType || '',
+        keywords: Array.isArray(details.keywords) ? details.keywords : [],
         equipments: Array.isArray(details.equipments) ? details.equipments : [],
         exerciseTips: Array.isArray(details.exerciseTips) ? details.exerciseTips : [],
         variations: Array.isArray(details.variations) ? details.variations : [],
@@ -968,6 +1040,149 @@ function cloneWorkoutDay(week, sourceDayName, newDayName) {
     return { success: true, message: 'Cloned ' + sourceRows.length + ' exercises to "' + newDayName + '".' };
   } catch (e) {
     return { success: false, message: 'Error: ' + e.message };
+  }
+}
+
+// ==========================================
+// CLONE ENTIRE WEEK
+// ==========================================
+
+function cloneWeekToEnd(sourceWeek) {
+  try {
+    sourceWeek = parseInt(sourceWeek);
+    if (isNaN(sourceWeek) || sourceWeek < 1) {
+      return { success: false, message: 'Invalid week number.' };
+    }
+
+    const ss = SpreadsheetApp.getActiveSpreadsheet();
+    const sheet = ss.getSheetByName(SHEET_NAME_PLAN);
+    if (!sheet) return { success: false, message: 'WorkoutPlan sheet not found.' };
+
+    const data = sheet.getDataRange().getValues();
+    const headers = data[0];
+    const weekIndex = headers.indexOf('Week');
+    if (weekIndex === -1) return { success: false, message: 'WorkoutPlan missing Week column.' };
+
+    // Find max existing week and collect source week rows
+    let maxWeek = 0;
+    const sourceRows = [];
+    
+    for (let i = 1; i < data.length; i++) {
+      const w = parseInt(data[i][weekIndex]);
+      if (w > maxWeek) maxWeek = w;
+      if (w === sourceWeek) {
+        sourceRows.push(data[i].slice());
+      }
+    }
+
+    if (sourceRows.length === 0) {
+      return { success: false, message: 'No exercises found for Week ' + sourceWeek + '.' };
+    }
+
+    const newWeek = maxWeek + 1;
+
+    // Clone each row with the new week number
+    sourceRows.forEach(row => {
+      row[weekIndex] = newWeek;
+      sheet.appendRow(row);
+    });
+
+    return { 
+      success: true, 
+      newWeek: newWeek,
+      message: 'Successfully cloned Week ' + sourceWeek + ' to Week ' + newWeek + ' (' + sourceRows.length + ' exercises).' 
+    };
+  } catch (e) {
+    return { success: false, message: 'Error: ' + e.message };
+  }
+}
+
+// ==========================================
+// MIGRATE EXERCISE CACHE TO COLUMNS
+// ==========================================
+
+function migrateExerciseCacheStructure() {
+  try {
+    setupExerciseCacheSheet();
+    const ss = SpreadsheetApp.getActiveSpreadsheet();
+    const sheet = ss.getSheetByName(SHEET_NAME_EXERCISE_CACHE);
+    
+    if (!sheet || sheet.getLastRow() <= 1) {
+      return { success: false, message: 'No data to migrate.' };
+    }
+
+    const data = sheet.getDataRange().getValues();
+    const headers = data[0];
+    
+    // Check if already migrated (has exerciseId column)
+    if (headers.indexOf('exerciseId') !== -1) {
+      return { success: false, message: 'Already migrated to column structure.' };
+    }
+
+    // Check if old structure exists (has JSON column)
+    const jsonColIndex = headers.indexOf('JSON');
+    if (jsonColIndex === -1) {
+      return { success: false, message: 'Could not find old JSON column.' };
+    }
+
+    // Clear and recreate with new headers
+    sheet.clearContents();
+    const newHeaders = [
+      'exerciseId', 'name', 'imageUrl', 'imageUrls', 'equipments', 'bodyParts',
+      'exerciseType', 'targetMuscles', 'secondaryMuscles', 'videoUrl', 'keywords',
+      'overview', 'instructions', 'exerciseTips', 'variations', 'relatedExerciseIds',
+      'rawJSON', 'dateAdded'
+    ];
+    sheet.appendRow(newHeaders);
+    sheet.getRange(1, 1, 1, newHeaders.length).setFontWeight('bold').setBackground('#1a1a2e').setFontColor('#ffffff');
+
+    // Migrate old data
+    let migratedCount = 0;
+    for (let i = 1; i < data.length; i++) {
+      const row = data[i];
+      const exerciseId = String(row[0] || '').trim();
+      const jsonStr = String(row[jsonColIndex] || '').trim();
+
+      if (!exerciseId || !jsonStr) continue;
+
+      try {
+        const details = JSON.parse(jsonStr);
+        if (!details || !details.name) continue;
+
+        const newRow = [
+          exerciseId,
+          details.name || '',
+          details.imageUrl || '',
+          JSON.stringify(details.imageUrls || {}),
+          JSON.stringify(details.equipments || []),
+          JSON.stringify(details.bodyParts || []),
+          details.exerciseType || '',
+          JSON.stringify(details.targetMuscles || []),
+          JSON.stringify(details.secondaryMuscles || []),
+          details.videoUrl || '',
+          JSON.stringify(details.keywords || []),
+          details.overview || '',
+          JSON.stringify(details.instructions || []),
+          JSON.stringify(details.exerciseTips || []),
+          JSON.stringify(details.variations || []),
+          JSON.stringify(details.relatedExerciseIds || []),
+          JSON.stringify(details),
+          new Date().toISOString()
+        ];
+
+        sheet.appendRow(newRow);
+        migratedCount++;
+      } catch (e) {
+        Logger.log('Error migrating exercise ' + exerciseId + ': ' + e.message);
+      }
+    }
+
+    return {
+      success: true,
+      message: 'Successfully migrated ' + migratedCount + ' exercises to column structure.'
+    };
+  } catch (e) {
+    return { success: false, message: 'Migration error: ' + e.message };
   }
 }
 
@@ -1258,6 +1473,218 @@ function getProgressData() {
 }
 
 // ==========================================
+// UPDATE WORKOUT PLAN ROW
+// ==========================================
+
+function updateWorkoutPlanRow(week, dayName, section, order, fields) {
+  try {
+    const ss = SpreadsheetApp.getActiveSpreadsheet();
+    const sheet = ss.getSheetByName(SHEET_NAME_PLAN);
+    if (!sheet) return { success: false, message: 'WorkoutPlan sheet not found.' };
+
+    const data = sheet.getDataRange().getValues();
+    const headers = data[0];
+
+    const weekIndex    = headers.indexOf('Week');
+    const dayIndex     = headers.indexOf('Day');
+    const sectionIndex = headers.indexOf('Section');
+    const orderIndex   = headers.indexOf('Order');
+
+    const colMap = {
+      exercise: headers.indexOf('Exercise'),
+      sets:     headers.indexOf('Sets'),
+      reps:     headers.indexOf('Reps'),
+      weight:   headers.indexOf('Weight'),
+      tempo:    headers.indexOf('Tempo'),
+      rest:     headers.indexOf('Rest'),
+      notes:    headers.indexOf('Notes'),
+      category: headers.indexOf('Category')
+    };
+
+    for (let i = 1; i < data.length; i++) {
+      if (String(data[i][weekIndex])    === String(week)    &&
+          String(data[i][dayIndex])     === String(dayName) &&
+          String(data[i][sectionIndex]) === String(section) &&
+          String(data[i][orderIndex])   === String(order)) {
+
+        Object.keys(fields).forEach(key => {
+          const colIndex = colMap[key];
+          if (colIndex !== undefined && colIndex !== -1 && fields[key] !== undefined) {
+            sheet.getRange(i + 1, colIndex + 1).setValue(fields[key]);
+          }
+        });
+
+        return { success: true, message: 'Exercise updated.' };
+      }
+    }
+
+    return { success: false, message: 'No matching row found (Week ' + week + ', ' + dayName + ', ' + section + ', order ' + order + ').' };
+  } catch (e) {
+    return { success: false, message: 'Error: ' + e.message };
+  }
+}
+
+// ==========================================
+// EXERCISE CACHE BROWSER
+// ==========================================
+
+function getExerciseCacheOptions() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const sheet = ss.getSheetByName(SHEET_NAME_EXERCISE_CACHE);
+  if (!sheet || sheet.getLastRow() <= 1) {
+    return { options: { equipments: [], bodyParts: [], exerciseType: [], targetMuscles: [], secondaryMuscles: [], keywords: [] }, total: 0 };
+  }
+
+  const data = sheet.getDataRange().getValues();
+  const sets = { equipments: new Set(), bodyParts: new Set(), exerciseType: new Set(), targetMuscles: new Set(), secondaryMuscles: new Set(), keywords: new Set() };
+  let validRows = 0;
+
+  for (let i = 1; i < data.length; i++) {
+    const row = data[i];
+    if (!String(row[0] || '').trim()) continue;
+    validRows++;
+    [[4, 'equipments'], [5, 'bodyParts'], [7, 'targetMuscles'], [8, 'secondaryMuscles'], [10, 'keywords']].forEach(([col, field]) => {
+      parseJsonArray_(String(row[col] || '')).forEach(v => { const s = String(v || '').trim(); if (s) sets[field].add(s); });
+    });
+    const et = String(row[6] || '').trim();
+    if (et) sets.exerciseType.add(et);
+  }
+
+  const options = {};
+  Object.keys(sets).forEach(k => { options[k] = [...sets[k]].sort(); });
+  return { options, total: validRows };
+}
+
+function searchExerciseCache(filters, page) {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const sheet = ss.getSheetByName(SHEET_NAME_EXERCISE_CACHE);
+  if (!sheet || sheet.getLastRow() <= 1) return { items: [], total: 0, page: 1, totalPages: 0 };
+
+  const PAGE_SIZE = 10;
+  const pageNum = Math.max(1, parseInt(page) || 1);
+  const f = filters || {};
+  const searchText = String(f.searchText || '').toLowerCase().trim();
+
+  const toFilterArr = v => {
+    if (Array.isArray(v)) return v.map(s => String(s).trim().toLowerCase()).filter(Boolean);
+    const s = String(v || '').trim().toLowerCase();
+    return s ? [s] : [];
+  };
+  const fEq = toFilterArr(f.equipments);
+  const fBp = toFilterArr(f.bodyParts);
+  const fEt = toFilterArr(f.exerciseType);
+  const fTm = toFilterArr(f.targetMuscles);
+  const fSm = toFilterArr(f.secondaryMuscles);
+  const fKw = toFilterArr(f.keywords);
+
+  const data = sheet.getDataRange().getValues();
+  const matched = [];
+
+  const arrMatchesFilter = (row, col, filterArr) => {
+    if (!filterArr.length) return true;
+    const vals = parseJsonArray_(String(row[col] || '')).map(v => String(v || '').trim().toLowerCase());
+    return filterArr.some(f => vals.includes(f));
+  };
+  const strMatchesFilter = (val, filterArr) => {
+    if (!filterArr.length) return true;
+    return filterArr.some(f => f === String(val || '').trim().toLowerCase());
+  };
+
+  for (let i = 1; i < data.length; i++) {
+    const row = data[i];
+    const id = String(row[0] || '').trim();
+    if (!id) continue;
+    const name = String(row[1] || '').trim();
+    if (searchText && !(name + ' ' + String(row[11] || '')).toLowerCase().includes(searchText)) continue;
+    if (!arrMatchesFilter(row, 4, fEq)) continue;
+    if (!arrMatchesFilter(row, 5, fBp)) continue;
+    if (!strMatchesFilter(row[6], fEt)) continue;
+    if (!arrMatchesFilter(row, 7, fTm)) continue;
+    if (!arrMatchesFilter(row, 8, fSm)) continue;
+    if (!arrMatchesFilter(row, 10, fKw)) continue;
+    matched.push({
+      exerciseId: id,
+      name,
+      imageUrl: String(row[2] || '').trim(),
+      equipments: parseJsonArray_(String(row[4] || '')),
+      bodyParts: parseJsonArray_(String(row[5] || '')),
+      exerciseType: String(row[6] || '').trim(),
+      targetMuscles: parseJsonArray_(String(row[7] || ''))
+    });
+  }
+
+  const total = matched.length;
+  const totalPages = Math.ceil(total / PAGE_SIZE) || 0;
+  const start = (pageNum - 1) * PAGE_SIZE;
+  return { items: matched.slice(start, start + PAGE_SIZE), total, page: pageNum, totalPages };
+}
+
+// ==========================================
+// SAVE CUSTOM EXERCISE
+// ==========================================
+
+function saveCustomExerciseCache(week, dayName, section, order, customData) {
+  try {
+    const safeDay     = String(dayName || '').replace(/[^a-zA-Z0-9]/g, '_');
+    const safeSection = String(section  || '').replace(/[^a-zA-Z0-9]/g, '_');
+    const customId    = 'customex_' + String(week) + '_' + safeDay + '_' + safeSection + '_' + String(order);
+
+    const details = {
+      name:             String(customData.name      || '').trim(),
+      imageUrl:         String(customData.imageUrl  || '').trim(),
+      imageUrls:        {},
+      videoUrl:         String(customData.videoUrl  || '').trim(),
+      overview:         String(customData.overview  || '').trim(),
+      instructions:     Array.isArray(customData.instructions)     ? customData.instructions     : [],
+      exerciseTips:     Array.isArray(customData.exerciseTips)     ? customData.exerciseTips     : [],
+      variations:       Array.isArray(customData.variations)       ? customData.variations       : [],
+      targetMuscles:    Array.isArray(customData.targetMuscles)    ? customData.targetMuscles    : [],
+      secondaryMuscles: Array.isArray(customData.secondaryMuscles) ? customData.secondaryMuscles : [],
+      equipments:       Array.isArray(customData.equipments)       ? customData.equipments       : [],
+      bodyParts:        Array.isArray(customData.bodyParts)        ? customData.bodyParts        : [],
+      exerciseType:     String(customData.exerciseType || '').trim(),
+      keywords:         Array.isArray(customData.keywords)         ? customData.keywords         : [],
+      relatedExerciseIds: [],
+      isCustom: true
+    };
+
+    upsertExerciseCache_(customId, details);
+
+    const ss = SpreadsheetApp.getActiveSpreadsheet();
+    const sheet = ss.getSheetByName(SHEET_NAME_PLAN);
+    if (!sheet) return { success: false, message: 'WorkoutPlan sheet not found.' };
+
+    ensureWorkoutPlanMetadataColumns_(sheet);
+    const data = sheet.getDataRange().getValues();
+    const headers = data[0];
+
+    const weekIndex      = headers.indexOf('Week');
+    const dayIndex       = headers.indexOf('Day');
+    const sectionIndex   = headers.indexOf('Section');
+    const orderIndex     = headers.indexOf('Order');
+    const exerciseIdIndex = headers.indexOf(EXERCISE_ID_COLUMN);
+    const isCustomIndex  = headers.indexOf('IsCustom');
+
+    let updated = false;
+    for (let i = 1; i < data.length; i++) {
+      if (String(data[i][weekIndex])    === String(week)    &&
+          String(data[i][dayIndex])     === String(dayName) &&
+          String(data[i][sectionIndex]) === String(section) &&
+          String(data[i][orderIndex])   === String(order)) {
+        if (exerciseIdIndex !== -1) sheet.getRange(i + 1, exerciseIdIndex + 1).setValue(customId);
+        if (isCustomIndex   !== -1) sheet.getRange(i + 1, isCustomIndex   + 1).setValue(1);
+        updated = true;
+        break;
+      }
+    }
+
+    return { success: true, customId, updated };
+  } catch (e) {
+    return { success: false, message: 'Error: ' + e.message };
+  }
+}
+
+// ==========================================
 // MENU SETUP
 // ==========================================
 
@@ -1266,6 +1693,8 @@ function onOpen() {
     .createMenu('💪 Workout App')
     .addItem('Initialize / Reset App', 'initializeSpreadsheet')
     .addItem('Open App', 'openApp')
+    .addSeparator()
+    .addItem('Migrate Exercise Cache to Columns', 'migrateExerciseCacheStructure')
     .addToUi();
 }
 

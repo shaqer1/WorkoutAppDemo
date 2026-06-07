@@ -512,6 +512,29 @@
   .empty { text-align: center; padding: 60px 20px; color: var(--muted); }
   .empty-icon { font-size: 48px; margin-bottom: 12px; }
 
+  /* EDIT BUTTON */
+  .edit-field-btn {
+    background: transparent;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    color: var(--muted);
+    font-size: 13px;
+    padding: 3px 7px;
+    cursor: pointer;
+    flex-shrink: 0;
+    line-height: 1;
+  }
+  .edit-field-btn:active { background: var(--card2); }
+
+  /* EDIT MODAL FIELD */
+  .edit-field-label {
+    font-size: 10px;
+    color: var(--muted);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    margin-bottom: 6px;
+  }
+
   /* TOAST */
   .toast {
     position: fixed;
@@ -542,6 +565,7 @@
     <button class="week-btn" onclick="changeWeek(-1)">‹</button>
     <div class="week-display" id="week-display">W1</div>
     <button class="week-btn" onclick="changeWeek(1)">›</button>
+    <button class="week-btn" onclick="openCloneWeekModal()" title="Clone week" style="margin-left:12px">🔀</button>
   </div>
 </div>
 
@@ -619,6 +643,39 @@
   </div>
 </div>
 
+<!-- CLONE WEEK MODAL -->
+<div class="modal-overlay" id="clone-week-modal">
+  <div class="modal">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">
+      <div class="modal-title" style="font-size:20px;margin:0">Clone Week</div>
+      <button style="background:transparent;border:none;color:var(--muted);font-size:22px;cursor:pointer" onclick="closeCloneWeekModal()">×</button>
+    </div>
+    <div style="margin-bottom:16px;color:var(--text);font-size:14px">
+      <label style="display:block;margin-bottom:8px">Select week to clone:</label>
+      <select id="clone-week-select" style="width:100%;padding:10px;background:var(--card2);border:1px solid var(--border);color:var(--text);border-radius:8px;font-size:14px">
+      </select>
+    </div>
+    <div style="color:var(--muted);font-size:12px;margin-bottom:16px" id="clone-week-info">
+      Cloned week will be added to the end of your plan.
+    </div>
+    <button class="complete-btn complete-btn-workout" onclick="performCloneWeek()">Clone Week 🔀</button>
+    <button style="width:100%;padding:12px;background:transparent;border:none;color:var(--muted);cursor:pointer;margin-top:8px" onclick="closeCloneWeekModal()">Cancel</button>
+  </div>
+</div>
+
+<!-- EDIT EXERCISE MODAL -->
+<div class="modal-overlay" id="edit-exercise-modal">
+  <div class="modal" style="max-height:88vh;overflow-y:auto">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">
+      <div class="modal-title" style="font-size:20px;margin:0">Edit Exercise</div>
+      <button style="background:transparent;border:none;color:var(--muted);font-size:22px;cursor:pointer" onclick="closeEditModal()">×</button>
+    </div>
+    <div id="edit-exercise-body" style="display:flex;flex-direction:column;gap:12px"></div>
+    <button class="complete-btn complete-btn-workout" style="margin-top:20px" onclick="saveEditModal()">Save Changes ✓</button>
+    <button style="width:100%;padding:12px;background:transparent;border:none;color:var(--muted);cursor:pointer;margin-top:8px" onclick="closeEditModal()">Cancel</button>
+  </div>
+</div>
+
 <div class="toast" id="toast"></div>
 
 <script>
@@ -628,8 +685,15 @@ let currentWorkout = null;
 let selectedEnergy = 'medium';
 let setData = {}; // { exerciseName: { setNum: { reps, weight, done } } }
 let completedExercises = new Set();
-let detailContext = { exercise: '', section: '' };
+let detailContext = { exercise: '', section: '', order: '' };
+let detailPayload = null;
+let editContext = {};
+let editSetsCount = 1;
 let completedDays = new Set();
+let cacheOptions = null;
+let cacheFilters = { equipments: [], bodyParts: [], exerciseType: [], targetMuscles: [], secondaryMuscles: [], keywords: [], searchText: '' };
+let cachePage = 1;
+let cacheSearchTimer = null;
 
 // ==========================================
 // INIT
@@ -654,7 +718,7 @@ function updateWeekDisplay() {
 
 function changeWeek(dir) {
   const newWeek = currentWeek + dir;
-  if (newWeek < 1 || newWeek > 10) return;
+  if (newWeek < 1) return;
   currentWeek = newWeek;
   updateWeekDisplay();
   currentDay = null;
@@ -838,17 +902,34 @@ function renderExCard(ex, type) {
   const detailsPayload = encodeURIComponent(JSON.stringify({
     exercise: ex.exercise || '',
     section: ex.section || '',
+    order: String(ex.order || ''),
     exerciseId: ex.exerciseId || '',
     imageUrl: selectedImage,
     videoUrl: selectedVideo,
     overview: ex.overview || '',
     instructions: Array.isArray(ex.instructions) ? ex.instructions : [],
     targetMuscles: Array.isArray(ex.targetMuscles) ? ex.targetMuscles : [],
+    secondaryMuscles: Array.isArray(ex.secondaryMuscles) ? ex.secondaryMuscles : [],
+    bodyParts: Array.isArray(ex.bodyParts) ? ex.bodyParts : [],
+    exerciseType: ex.exerciseType || '',
+    keywords: Array.isArray(ex.keywords) ? ex.keywords : [],
     equipments: Array.isArray(ex.equipments) ? ex.equipments : [],
     exerciseTips: Array.isArray(ex.exerciseTips) ? ex.exerciseTips : [],
     variations: Array.isArray(ex.variations) ? ex.variations : [],
     relatedIds: Array.isArray(ex.relatedExerciseIds) ? ex.relatedExerciseIds : [],
     searchResults: Array.isArray(ex.exerciseSearchResults) ? ex.exerciseSearchResults : []
+  })).replace(/'/g, '%27');
+  const editPayload = encodeURIComponent(JSON.stringify({
+    section:  ex.section  || '',
+    order:    String(ex.order || ''),
+    exercise: ex.exercise || '',
+    sets:     String(ex.sets     || ''),
+    reps:     String(ex.reps     || ''),
+    weight:   String(ex.weight   || ''),
+    tempo:    String(ex.tempo    || ''),
+    rest:     String(ex.rest     || ''),
+    notes:    String(ex.notes    || ''),
+    category: String(ex.category || type)
   })).replace(/'/g, '%27');
   
   let setHtml = '';
@@ -886,7 +967,10 @@ function renderExCard(ex, type) {
     <div class="ex-card" id="card-${exId}">
       <div class="ex-header">
         <div class="ex-name">${ex.exercise}</div>
-        <span class="ex-badge ${badgeClass}">${(ex.category || type).toUpperCase()}</span>
+        <div style="display:flex;align-items:center;gap:6px;flex-shrink:0">
+          <span class="ex-badge ${badgeClass}">${(ex.category || type).toUpperCase()}</span>
+          <button class="edit-field-btn" onclick="openEditModal('${editPayload}')">✏️</button>
+        </div>
       </div>
       
       <div class="ex-specs">
@@ -945,8 +1029,14 @@ function openExerciseDetails(encodedPayload) {
 
   detailContext = {
     exercise: String(payload.exercise || ''),
-    section: String(payload.section || '')
+    section: String(payload.section || ''),
+    order: String(payload.order || '')
   };
+  detailPayload = payload;
+
+  cacheFilters = { equipments: [], bodyParts: [], exerciseType: [], targetMuscles: [], secondaryMuscles: [], keywords: [], searchText: '' };
+  cachePage = 1;
+  clearTimeout(cacheSearchTimer);
 
   const hasExerciseId = !!String(payload.exerciseId || '').trim();
   const instructions = Array.isArray(payload.instructions) ? payload.instructions : [];
@@ -958,7 +1048,12 @@ function openExerciseDetails(encodedPayload) {
   const searchResults = Array.isArray(payload.searchResults) ? payload.searchResults : [];
 
   body.innerHTML = `
-    <div style="font-size:20px;font-weight:800;margin-bottom:10px">${payload.exercise || 'Exercise'}</div>
+    <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:10px;gap:8px">
+      <div style="font-size:20px;font-weight:800;flex:1">${payload.exercise || 'Exercise'}</div>
+      ${payload.section ? `<button onclick="enterDetailEditMode()"
+        style="background:rgba(74,158,255,0.15);border:1px solid rgba(74,158,255,0.3);color:var(--blue);
+               padding:6px 12px;border-radius:8px;cursor:pointer;font-size:12px;flex-shrink:0;font-weight:600">✏️ Edit</button>` : ''}
+    </div>
     ${payload.imageUrl ? `<img src="${payload.imageUrl}" alt="${payload.exercise}" style="width:100%;max-height:220px;object-fit:cover;border-radius:12px;border:1px solid var(--border);margin-bottom:12px">` : ''}
     ${payload.videoUrl ? `<a href="${payload.videoUrl}" target="_blank" class="video-link" style="margin-bottom:12px">▶ Open Video Demo</a>` : ''}
     ${payload.overview ? `<div class="meal-suggestion" style="margin-bottom:12px"><div class="meal-label">OVERVIEW</div><div class="meal-text">${payload.overview}</div></div>` : ''}
@@ -1037,6 +1132,24 @@ function openExerciseDetails(encodedPayload) {
         </div>
       </div>
     ` : ''}
+    <div style="margin-top:4px;border:1px solid var(--border);border-radius:12px;overflow:hidden">
+      <div onclick="toggleCacheBrowser()"
+           style="display:flex;justify-content:space-between;align-items:center;padding:12px 14px;
+                  cursor:pointer;background:var(--card2);user-select:none">
+        <div style="font-weight:700;font-size:13px">Browse Exercise Cache</div>
+        <div id="cache-accordion-icon" style="color:var(--muted);font-size:12px">&#9660;</div>
+      </div>
+      <div id="cache-accordion-body" style="display:none;padding:12px">
+        <div id="cache-filter-area">
+          <div style="display:flex;align-items:center;gap:8px">
+            <div class="ex-gif-spinner"></div>
+            <div style="font-size:12px;color:var(--muted)">Loading filter options...</div>
+          </div>
+        </div>
+        <div id="cache-results-area"></div>
+        <div id="cache-pagination-area"></div>
+      </div>
+    </div>
   `;
 
   modal.classList.add('show');
@@ -1057,6 +1170,205 @@ function escapeHtmlAttr_(value) {
 function closeExerciseDetails() {
   const modal = document.getElementById('exercise-detail-modal');
   if (modal) modal.classList.remove('show');
+}
+
+function enterDetailEditMode() {
+  const body = document.getElementById('exercise-detail-body');
+  if (!body) return;
+  const p = detailPayload || {};
+  const instructions    = Array.isArray(p.instructions)    ? p.instructions    : [];
+  const exerciseTips    = Array.isArray(p.exerciseTips)    ? p.exerciseTips    : [];
+  const variations      = Array.isArray(p.variations)      ? p.variations      : [];
+  const targetMuscles   = Array.isArray(p.targetMuscles)   ? p.targetMuscles   : [];
+  const secondaryMuscles= Array.isArray(p.secondaryMuscles)? p.secondaryMuscles: [];
+  const equipments      = Array.isArray(p.equipments)      ? p.equipments      : [];
+  const bodyParts       = Array.isArray(p.bodyParts)       ? p.bodyParts       : [];
+  const keywords        = Array.isArray(p.keywords)        ? p.keywords        : [];
+  const fieldStyle = 'width:100%;background:var(--card);border:1px solid var(--border);color:var(--text);border-radius:8px;padding:8px 10px;font-size:13px;margin-top:4px';
+  const labelStyle = 'font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:0.5px;font-weight:600';
+  const sectionStyle = 'background:var(--card2);border:1px solid var(--border);border-radius:10px;padding:12px;margin-bottom:10px';
+  body.innerHTML = `
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;gap:8px">
+      <div style="font-size:16px;font-weight:800">Edit Exercise</div>
+      <button onclick="cancelDetailEdit()"
+        style="background:transparent;border:1px solid var(--border);color:var(--muted);
+               padding:5px 12px;border-radius:8px;cursor:pointer;font-size:12px">Cancel</button>
+    </div>
+    <div style="${sectionStyle}">
+      <div style="${labelStyle}">Exercise Name</div>
+      <input id="de-name" type="text" value="${escapeHtmlAttr_(p.exercise || '')}" style="${fieldStyle}">
+    </div>
+    <div style="${sectionStyle}">
+      <div style="${labelStyle}">Image URL</div>
+      <input id="de-image" type="text" value="${escapeHtmlAttr_(p.imageUrl || '')}" placeholder="https://..." style="${fieldStyle}">
+    </div>
+    <div style="${sectionStyle}">
+      <div style="${labelStyle}">Video URL</div>
+      <input id="de-video" type="text" value="${escapeHtmlAttr_(p.videoUrl || '')}" placeholder="https://..." style="${fieldStyle}">
+    </div>
+    <div style="${sectionStyle}">
+      <div style="${labelStyle}">Overview</div>
+      <textarea id="de-overview" rows="4" style="${fieldStyle};resize:vertical">${escapeHtmlAttr_(p.overview || '')}</textarea>
+    </div>
+    <div style="${sectionStyle}">
+      <div style="${labelStyle}">Instructions <span style="font-weight:400;text-transform:none">(one per line)</span></div>
+      <textarea id="de-instructions" rows="6" style="${fieldStyle};resize:vertical">${escapeHtmlAttr_(instructions.join('\n'))}</textarea>
+    </div>
+    <div style="${sectionStyle}">
+      <div style="${labelStyle}">Exercise Tips <span style="font-weight:400;text-transform:none">(one per line)</span></div>
+      <textarea id="de-tips" rows="4" style="${fieldStyle};resize:vertical">${escapeHtmlAttr_(exerciseTips.join('\n'))}</textarea>
+    </div>
+    <div style="${sectionStyle}">
+      <div style="${labelStyle}">Variations <span style="font-weight:400;text-transform:none">(one per line)</span></div>
+      <textarea id="de-variations" rows="3" style="${fieldStyle};resize:vertical">${escapeHtmlAttr_(variations.join('\n'))}</textarea>
+    </div>
+    <div style="${sectionStyle}">
+      <div style="${labelStyle}">Target Muscles <span style="font-weight:400;text-transform:none">(comma-separated)</span></div>
+      <input id="de-muscles" type="text" value="${escapeHtmlAttr_(targetMuscles.join(', '))}" style="${fieldStyle}">
+    </div>
+    <div style="${sectionStyle}">
+      <div style="${labelStyle}">Secondary Muscles <span style="font-weight:400;text-transform:none">(comma-separated)</span></div>
+      <input id="de-secondary" type="text" value="${escapeHtmlAttr_(secondaryMuscles.join(', '))}" style="${fieldStyle}">
+    </div>
+    <div style="${sectionStyle}">
+      <div style="${labelStyle}">Equipment <span style="font-weight:400;text-transform:none">(comma-separated)</span></div>
+      <input id="de-equip" type="text" value="${escapeHtmlAttr_(equipments.join(', '))}" style="${fieldStyle}">
+    </div>
+    <div style="${sectionStyle}">
+      <div style="${labelStyle}">Body Parts <span style="font-weight:400;text-transform:none">(comma-separated)</span></div>
+      <input id="de-bodyparts" type="text" value="${escapeHtmlAttr_(bodyParts.join(', '))}" style="${fieldStyle}">
+    </div>
+    <div style="${sectionStyle}">
+      <div style="${labelStyle}">Exercise Type</div>
+      <input id="de-type" type="text" value="${escapeHtmlAttr_(p.exerciseType || '')}" style="${fieldStyle}">
+    </div>
+    <div style="${sectionStyle}">
+      <div style="${labelStyle}">Keywords <span style="font-weight:400;text-transform:none">(comma-separated)</span></div>
+      <input id="de-keywords" type="text" value="${escapeHtmlAttr_(keywords.join(', '))}" style="${fieldStyle}">
+    </div>
+    <div style="font-size:11px;color:var(--muted);margin-bottom:12px;padding:8px 10px;background:rgba(74,158,255,0.05);border-radius:8px;border:1px solid rgba(74,158,255,0.2)">
+      Saving will create a custom exercise entry (ID: <code>customex_${currentWeek}_...</code>) and update this workout slot.
+    </div>
+    <button id="de-save-btn" onclick="saveCustomExercise(this)"
+      style="width:100%;background:linear-gradient(135deg,var(--green),#00b894);border:none;color:#000;
+             padding:14px;border-radius:12px;cursor:pointer;font-size:15px;font-weight:700;margin-bottom:8px">
+      💾 Save Custom Exercise
+    </button>
+  `;
+}
+
+function cancelDetailEdit() {
+  if (detailPayload) {
+    const encoded = encodeURIComponent(JSON.stringify(detailPayload)).replace(/'/g, '%27');
+    openExerciseDetails(encoded);
+  } else {
+    closeExerciseDetails();
+  }
+}
+
+function saveCustomExercise(btn) {
+  const parseLines  = id => (document.getElementById(id)?.value || '').split('\n').map(s => s.trim()).filter(Boolean);
+  const parseCommas = id => (document.getElementById(id)?.value || '').split(',').map(s => s.trim()).filter(Boolean);
+
+  const customData = {
+    name:             (document.getElementById('de-name')?.value     || '').trim(),
+    imageUrl:         (document.getElementById('de-image')?.value    || '').trim(),
+    videoUrl:         (document.getElementById('de-video')?.value    || '').trim(),
+    overview:         (document.getElementById('de-overview')?.value || '').trim(),
+    instructions:     parseLines('de-instructions'),
+    exerciseTips:     parseLines('de-tips'),
+    variations:       parseLines('de-variations'),
+    targetMuscles:    parseCommas('de-muscles'),
+    secondaryMuscles: parseCommas('de-secondary'),
+    equipments:       parseCommas('de-equip'),
+    bodyParts:        parseCommas('de-bodyparts'),
+    exerciseType:     (document.getElementById('de-type')?.value     || '').trim(),
+    keywords:         parseCommas('de-keywords')
+  };
+
+  if (!customData.name) {
+    showToast('Exercise name is required');
+    return;
+  }
+
+  btn.disabled = true;
+  btn.textContent = 'Saving…';
+
+  google.script.run
+    .withSuccessHandler(result => {
+      btn.disabled = false;
+      btn.textContent = '💾 Save Custom Exercise';
+      if (result && result.success) {
+        showToast('✅ Saved! ID: ' + result.customId);
+        closeExerciseDetails();
+        if (typeof showDay === 'function' && currentDay) showDay(currentDay);
+      } else {
+        showToast('❌ ' + (result?.message || 'Save failed'));
+      }
+    })
+    .withFailureHandler(() => {
+      btn.disabled = false;
+      btn.textContent = '💾 Save Custom Exercise';
+      showToast('❌ Failed to save exercise');
+    })
+    .saveCustomExerciseCache(currentWeek, currentDay, detailContext.section, detailContext.order, customData);
+}
+
+// ==========================================
+// CLONE WEEK
+// ==========================================
+
+function openCloneWeekModal() {
+  // Populate week selector with available weeks
+  const select = document.getElementById('clone-week-select');
+  select.innerHTML = '';
+  
+  // Show weeks 1-52 (full year of programming)
+  for (let w = 1; w <= 52; w++) {
+    const opt = document.createElement('option');
+    opt.value = w;
+    opt.textContent = 'Week ' + w;
+    select.appendChild(opt);
+  }
+  
+  // Default to current week
+  select.value = currentWeek;
+  
+  const modal = document.getElementById('clone-week-modal');
+  if (modal) modal.classList.add('show');
+}
+
+function closeCloneWeekModal() {
+  const modal = document.getElementById('clone-week-modal');
+  if (modal) modal.classList.remove('show');
+}
+
+function performCloneWeek() {
+  const select = document.getElementById('clone-week-select');
+  const sourceWeek = select.value;
+  
+  if (!sourceWeek) {
+    showToast('⚠️ Please select a week');
+    return;
+  }
+  
+  google.script.run
+    .withSuccessHandler(result => {
+      if (result.success) {
+        showToast('✅ ' + result.message);
+        closeCloneWeekModal();
+        // Optionally navigate to the new week
+        currentWeek = result.newWeek;
+        updateWeekDisplay();
+        loadDays();
+      } else {
+        showToast('⚠️ ' + result.message);
+      }
+    })
+    .withFailureHandler(e => {
+      showToast('⚠️ Error cloning week: ' + e);
+    })
+    .cloneWeekToEnd(sourceWeek);
 }
 
 function swapExerciseSelection(encodedExercise, encodedSection, encodedExerciseId) {
@@ -1323,6 +1635,135 @@ function saveWorkout() {
 }
 
 // ==========================================
+// EDIT EXERCISE
+// ==========================================
+
+const EDIT_CATEGORIES = ['push','pull','legs','arms','core','warmup','stretch'];
+
+function openEditModal(encodedPayload) {
+  let p;
+  try { p = JSON.parse(decodeURIComponent(encodedPayload || '')); }
+  catch(e) { showToast('⚠️ Could not open editor'); return; }
+
+  editContext = p;
+
+  function field(label, id, val) {
+    return `
+      <div>
+        <div class="edit-field-label">${label}</div>
+        <input id="${id}" class="set-input" type="text"
+          value="${escapeHtmlAttr_(val)}"
+          style="text-align:left;padding:10px 12px;border-color:var(--border)">
+      </div>`;
+  }
+
+  editSetsCount = Math.max(1, parseInt(p.sets) || 1);
+
+  document.getElementById('edit-exercise-body').innerHTML = `
+    ${field('Exercise Name', 'ef-exercise', p.exercise)}
+    <div>
+      <div class="edit-field-label">Sets</div>
+      <div id="ef-sets-rows" style="margin-bottom:8px"></div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
+        <button onclick="adjustSets(-1)"
+          style="padding:10px;border-radius:10px;border:1px solid var(--border);
+                 background:var(--card2);color:var(--muted);font-size:13px;font-weight:700;cursor:pointer">
+          − Remove Set
+        </button>
+        <button onclick="adjustSets(1)"
+          style="padding:10px;border-radius:10px;border:1px solid rgba(0,212,170,0.4);
+                 background:rgba(0,212,170,0.08);color:var(--green);font-size:13px;font-weight:700;cursor:pointer">
+          + Add Set
+        </button>
+      </div>
+      <input type="hidden" id="ef-sets">
+    </div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
+      ${field('Reps', 'ef-reps', p.reps)}
+      ${field('Weight / Load', 'ef-weight', p.weight)}
+    </div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
+      ${field('Rest', 'ef-rest', p.rest)}
+      ${field('Tempo', 'ef-tempo', p.tempo)}
+    </div>
+    <div>
+      <div class="edit-field-label">Category</div>
+      <select id="ef-category" class="set-input"
+        style="text-align:left;padding:10px 12px;border-color:var(--border)">
+        ${EDIT_CATEGORIES.map(c =>
+          `<option value="${c}" ${p.category === c ? 'selected' : ''}>${c.toUpperCase()}</option>`
+        ).join('')}
+      </select>
+    </div>
+    <div>
+      <div class="edit-field-label">Notes</div>
+      <textarea id="ef-notes" class="notes-input" style="margin-bottom:0">${escapeHtmlAttr_(p.notes)}</textarea>
+    </div>
+  `;
+
+  renderSetsRows();
+  document.getElementById('edit-exercise-modal').classList.add('show');
+}
+
+function closeEditModal() {
+  document.getElementById('edit-exercise-modal').classList.remove('show');
+}
+
+function renderSetsRows() {
+  const display = document.getElementById('ef-sets-rows');
+  if (!display) return;
+  let html = '';
+  for (let i = 1; i <= editSetsCount; i++) {
+    html += `
+      <div style="display:flex;align-items:center;gap:10px;padding:8px 12px;
+                  background:var(--card2);border-radius:10px;margin-bottom:6px">
+        <span style="width:22px;height:22px;border-radius:50%;background:var(--accent2);
+                     display:flex;align-items:center;justify-content:center;
+                     font-size:11px;font-weight:700;color:var(--text);flex-shrink:0">${i}</span>
+        <span style="font-size:13px;color:var(--muted)">Set ${i}</span>
+      </div>`;
+  }
+  display.innerHTML = html;
+  document.getElementById('ef-sets').value = String(editSetsCount);
+}
+
+function adjustSets(delta) {
+  editSetsCount = Math.max(1, editSetsCount + delta);
+  renderSetsRows();
+}
+
+function saveEditModal() {
+  const exercise = document.getElementById('ef-exercise').value.trim();
+  if (!exercise) { showToast('Exercise name cannot be empty'); return; }
+
+  const fields = {
+    exercise: exercise,
+    sets:     document.getElementById('ef-sets').value.trim(),
+    reps:     document.getElementById('ef-reps').value.trim(),
+    weight:   document.getElementById('ef-weight').value.trim(),
+    tempo:    document.getElementById('ef-tempo').value.trim(),
+    rest:     document.getElementById('ef-rest').value.trim(),
+    notes:    document.getElementById('ef-notes').value.trim(),
+    category: document.getElementById('ef-category').value
+  };
+
+  google.script.run
+    .withSuccessHandler(result => {
+      if (result && result.success) {
+        closeEditModal();
+        showToast('✓ Exercise updated');
+        selectDay(currentDay);
+      } else {
+        showToast('⚠️ ' + (result && result.message ? result.message : 'Update failed'));
+      }
+    })
+    .withFailureHandler(err => {
+      showToast('⚠️ Save failed: ' + (err && err.message ? err.message : err));
+    })
+    .updateWorkoutPlanRow(currentWeek, currentDay, editContext.section, editContext.order, fields);
+}
+
+// ==========================================
 // NUTRITION
 // ==========================================
 
@@ -1549,6 +1990,191 @@ function showToast(msg) {
   t.textContent = msg;
   t.classList.add('show');
   setTimeout(() => t.classList.remove('show'), 3000);
+}
+
+// ==========================================
+// EXERCISE CACHE BROWSER
+// ==========================================
+
+function toggleCacheBrowser() {
+  const body = document.getElementById('cache-accordion-body');
+  const icon = document.getElementById('cache-accordion-icon');
+  if (!body || !icon) return;
+  const isOpen = body.style.display !== 'none';
+  body.style.display = isOpen ? 'none' : 'block';
+  icon.textContent = isOpen ? '▼' : '▲';
+  if (!isOpen) {
+    if (cacheOptions) {
+      renderCacheFilters(cacheOptions.options || {}, cacheOptions.total || 0);
+      loadCacheResults();
+    } else {
+      loadCacheOptions();
+    }
+  }
+}
+
+function loadCacheOptions() {
+  google.script.run
+    .withSuccessHandler(result => {
+      cacheOptions = result;
+      const fa = document.getElementById('cache-filter-area');
+      if (!fa) return;
+      renderCacheFilters(result.options || {}, result.total || 0);
+      loadCacheResults();
+    })
+    .withFailureHandler(() => {
+      const fa = document.getElementById('cache-filter-area');
+      if (fa) fa.innerHTML = '<div style="font-size:12px;color:var(--muted)">Could not load filter options.</div>';
+    })
+    .getExerciseCacheOptions();
+}
+
+function renderCacheFilters(options, total) {
+  const fa = document.getElementById('cache-filter-area');
+  if (!fa) return;
+
+  const mkSelect = (key, label, values) => `
+    <div style="flex:1;min-width:130px">
+      <div style="font-size:9px;color:var(--muted);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:3px">${label}</div>
+      <select id="cf-${key}" multiple size="3"
+              style="width:100%;background:var(--card);border:1px solid var(--border);color:var(--text);
+                     border-radius:8px;padding:4px 6px;font-size:11px;cursor:pointer;min-height:62px"
+              onchange="setCacheFilterMulti('${key}', this)">
+        ${values.map(v => `<option value="${escapeHtmlAttr_(v)}" ${(cacheFilters[key]||[]).includes(v) ? 'selected' : ''}>${escapeHtmlAttr_(v)}</option>`).join('')}
+      </select>
+      <div style="font-size:9px;color:var(--muted);margin-top:2px;text-align:center">Ctrl/Cmd+click for multi</div>
+    </div>`;
+
+  fa.innerHTML = `
+    <div style="font-size:11px;color:var(--muted);margin-bottom:8px">${total} exercises in cache</div>
+    <div style="margin-bottom:10px">
+      <input id="cf-search" type="text"
+             value="${escapeHtmlAttr_(cacheFilters.searchText)}"
+             placeholder="Search name or overview..."
+             style="width:100%;background:var(--card);border:1px solid var(--border);color:var(--text);
+                    border-radius:8px;padding:8px 10px;font-size:12px"
+             oninput="setCacheFilter('searchText', this.value)">
+    </div>
+    <div style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:10px">
+      ${mkSelect('equipments',       'Equipment',      options.equipments       || [])}
+      ${mkSelect('bodyParts',        'Body Part',      options.bodyParts        || [])}
+      ${mkSelect('exerciseType',     'Type',           options.exerciseType     || [])}
+      ${mkSelect('targetMuscles',    'Target Muscle',  options.targetMuscles    || [])}
+      ${mkSelect('secondaryMuscles', '2nd Muscle',     options.secondaryMuscles || [])}
+      ${mkSelect('keywords',         'Keyword',        options.keywords         || [])}
+    </div>
+    <button onclick="resetCacheFilters()"
+            style="font-size:11px;color:var(--muted);background:transparent;border:1px solid var(--border);
+                   border-radius:8px;padding:4px 10px;cursor:pointer;margin-bottom:12px">Reset Filters</button>
+    <hr style="border:none;border-top:1px solid var(--border);margin-bottom:12px">`;
+}
+
+function setCacheFilter(key, value) {
+  cacheFilters[key] = value;
+  cachePage = 1;
+  if (key === 'searchText') {
+    clearTimeout(cacheSearchTimer);
+    cacheSearchTimer = setTimeout(loadCacheResults, 350);
+  } else {
+    loadCacheResults();
+  }
+}
+
+function setCacheFilterMulti(key, selectEl) {
+  cacheFilters[key] = Array.from(selectEl.selectedOptions).map(o => o.value);
+  cachePage = 1;
+  loadCacheResults();
+}
+
+function resetCacheFilters() {
+  cacheFilters = { equipments: [], bodyParts: [], exerciseType: [], targetMuscles: [], secondaryMuscles: [], keywords: [], searchText: '' };
+  cachePage = 1;
+  ['equipments', 'bodyParts', 'exerciseType', 'targetMuscles', 'secondaryMuscles', 'keywords'].forEach(k => {
+    const el = document.getElementById('cf-' + k);
+    if (el) Array.from(el.options).forEach(o => { o.selected = false; });
+  });
+  const s = document.getElementById('cf-search');
+  if (s) s.value = '';
+  loadCacheResults();
+}
+
+function loadCacheResults() {
+  const ra = document.getElementById('cache-results-area');
+  if (!ra) return;
+  ra.innerHTML = `<div style="display:flex;align-items:center;gap:8px;padding:8px 0">
+    <div class="ex-gif-spinner"></div>
+    <div style="font-size:12px;color:var(--muted)">Loading...</div>
+  </div>`;
+  google.script.run
+    .withSuccessHandler(r => renderCacheResults(r || { items: [], total: 0, page: 1, totalPages: 0 }))
+    .withFailureHandler(() => {
+      const ra2 = document.getElementById('cache-results-area');
+      if (ra2) ra2.innerHTML = '<div style="font-size:12px;color:var(--muted)">Failed to load results.</div>';
+    })
+    .searchExerciseCache(cacheFilters, cachePage);
+}
+
+function renderCacheResults(result) {
+  const ra = document.getElementById('cache-results-area');
+  const pa = document.getElementById('cache-pagination-area');
+  if (!ra || !pa) return;
+
+  const items = result.items || [];
+  const canSwap = !!detailContext.exercise && !!detailContext.section;
+
+  if (!items.length) {
+    ra.innerHTML = '<div style="font-size:12px;color:var(--muted);text-align:center;padding:20px 0">No exercises found.</div>';
+    pa.innerHTML = '';
+    return;
+  }
+
+  ra.innerHTML = items.map(item => `
+    <div style="background:var(--card2);border:1px solid var(--border);padding:10px;border-radius:10px;
+                display:flex;align-items:center;gap:10px;margin-bottom:8px">
+      ${item.imageUrl
+        ? `<img src="${item.imageUrl}" style="width:44px;height:44px;object-fit:cover;border-radius:8px;flex-shrink:0">`
+        : `<div style="width:44px;height:44px;border-radius:8px;background:var(--card);display:flex;align-items:center;
+                       justify-content:center;font-size:18px;flex-shrink:0">&#127947;</div>`}
+      <div style="font-size:12px;line-height:1.3;flex:1;min-width:0;overflow:hidden">
+        <div style="font-weight:700;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${item.name || item.exerciseId}</div>
+        <div style="color:var(--muted);font-size:10px;margin-top:1px">
+          ${[item.exerciseType, ...(item.bodyParts || [])].filter(Boolean).join(' · ')}
+        </div>
+        ${(item.equipments || []).length ? `<div style="color:var(--muted);font-size:10px">${item.equipments.join(', ')}</div>` : ''}
+      </div>
+      <div style="display:flex;flex-direction:column;gap:4px;align-items:flex-end;flex-shrink:0">
+        <button style="background:rgba(74,158,255,0.15);border:1px solid rgba(74,158,255,0.3);color:var(--blue);
+                       padding:4px 8px;border-radius:8px;cursor:pointer;font-size:11px;min-width:42px"
+          onclick="openSwapExerciseInfo('${safeEncodedJsArg_(item.exerciseId)}')">Info</button>
+        ${canSwap ? `<button style="background:rgba(0,212,170,0.15);border:1px solid rgba(0,212,170,0.3);color:var(--green);
+                              padding:4px 8px;border-radius:8px;cursor:pointer;font-size:11px;min-width:42px"
+          onclick="swapExerciseSelection('${safeEncodedJsArg_(detailContext.exercise)}','${safeEncodedJsArg_(detailContext.section)}','${safeEncodedJsArg_(item.exerciseId)}')">Use</button>` : ''}
+      </div>
+    </div>
+  `).join('');
+
+  const { total, page, totalPages } = result;
+  if (totalPages <= 1) {
+    pa.innerHTML = `<div style="font-size:11px;color:var(--muted);text-align:center;margin:4px 0">${total} result${total !== 1 ? 's' : ''}</div>`;
+    return;
+  }
+  pa.innerHTML = `
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-top:8px">
+      <button onclick="setCachePage(${page - 1})" ${page <= 1 ? 'disabled' : ''}
+              style="padding:5px 12px;border-radius:8px;border:1px solid var(--border);background:var(--card2);
+                     color:var(--text);cursor:pointer;font-size:12px;opacity:${page <= 1 ? '0.4' : '1'}">&#8592; Prev</button>
+      <div style="font-size:11px;color:var(--muted)">Page ${page}/${totalPages} &middot; ${total} results</div>
+      <button onclick="setCachePage(${page + 1})" ${page >= totalPages ? 'disabled' : ''}
+              style="padding:5px 12px;border-radius:8px;border:1px solid var(--border);background:var(--card2);
+                     color:var(--text);cursor:pointer;font-size:12px;opacity:${page >= totalPages ? '0.4' : '1'}">Next &#8594;</button>
+    </div>`;
+}
+
+function setCachePage(pg) {
+  cachePage = pg;
+  loadCacheResults();
+  const ra = document.getElementById('cache-results-area');
+  if (ra) ra.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
 }
 </script>
 </body>
